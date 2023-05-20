@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /* Copyright (c) 2012-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <linux/init.h>
@@ -32,6 +31,10 @@
 #include <dsp/q6core.h>
 #include <dsp/q6common.h>
 #include <dsp/audio_cal_utils.h>
+#ifdef CONFIG_AUDIO_ELLIPTIC_ULTRASOUND
+#include <dsp/apr_elliptic.h>
+#include <elliptic/elliptic_mixer_controls.h>
+#endif /* CONFIG_AUDIO_ELLIPTIC_ULTRASOUND */
 
 #include "msm-pcm-routing-v2.h"
 #include "msm-pcm-routing-devdep.h"
@@ -1166,13 +1169,10 @@ done:
 EXPORT_SYMBOL(msm_pcm_routing_get_stream_app_type_cfg);
 
 static struct cal_block_data *msm_routing_find_topology_by_path(int path,
-								int cal_index,
-								int app_type,
-								int acdb_id)
+								int cal_index)
 {
 	struct list_head		*ptr, *next;
 	struct cal_block_data		*cal_block = NULL;
-	struct audio_cal_info_adm_top *cal_info;
 	pr_debug("%s\n", __func__);
 
 	list_for_each_safe(ptr, next,
@@ -1183,11 +1183,9 @@ static struct cal_block_data *msm_routing_find_topology_by_path(int path,
 
 		if (cal_utils_is_cal_stale(cal_block))
 			continue;
-		cal_info = (struct audio_cal_info_adm_top *)
-                      	 	 cal_block->cal_info;
-		if ((cal_info->path == path)  &&
-			(cal_info->app_type == app_type) &&
-			(cal_info->acdb_id == acdb_id)) {
+
+		if (((struct audio_cal_info_adm_top *)cal_block
+			->cal_info)->path == path) {
 			return cal_block;
 		}
 	}
@@ -1228,9 +1226,7 @@ static struct cal_block_data *msm_routing_find_topology(int path,
 		 "acdb_id %d %s\n",  __func__, path, app_type, acdb_id,
 		 exact ? "fail" : "defaulting to search by path");
 	return exact ? NULL : msm_routing_find_topology_by_path(path,
-								cal_index,
-								app_type,
-								acdb_id);
+								cal_index);
 }
 
 static int msm_routing_find_topology_on_index(int session_type, int app_type,
@@ -1673,11 +1669,6 @@ static int msm_pcm_routing_channel_mixer_v2(int fe_id, bool perf_mode,
 	}
 
 	be_id = channel_mixer_v2[fe_id][sess_type].port_idx - 1;
-	if (be_id < 0 || be_id >= MSM_BACKEND_DAI_MAX) {
-		pr_err("%s: Received out of bounds be_id %d\n",
-				__func__, be_id);
-		return -EINVAL;
-	}
 	channel_mixer_v2[fe_id][sess_type].input_channels[0] =
 		channel_mixer_v2[fe_id][sess_type].input_channel;
 
@@ -21836,10 +21827,6 @@ static const struct snd_kcontrol_new wsa_cdc_dma_rx_0_port_mixer_controls[] = {
 	MSM_BACKEND_DAI_WSA_CDC_DMA_RX_0,
 	MSM_BACKEND_DAI_SLIMBUS_8_TX, 1, 0, msm_routing_get_port_mixer,
 	msm_routing_put_port_mixer),
-	SOC_DOUBLE_EXT("SLIM_7_TX", SND_SOC_NOPM,
-	MSM_BACKEND_DAI_WSA_CDC_DMA_RX_0,
-	MSM_BACKEND_DAI_SLIMBUS_7_TX, 1, 0, msm_routing_get_port_mixer,
-	msm_routing_put_port_mixer),
 	SOC_DOUBLE_EXT("TERT_MI2S_TX", SND_SOC_NOPM,
 	MSM_BACKEND_DAI_WSA_CDC_DMA_RX_0,
 	MSM_BACKEND_DAI_TERTIARY_MI2S_TX, 1, 0, msm_routing_get_port_mixer,
@@ -24330,6 +24317,12 @@ static const struct snd_soc_dapm_widget msm_qdsp6_widgets[] = {
 		0, 0, 0, 0),
 	SND_SOC_DAPM_AIF_OUT("CDC_DMA_UL_HL", "CDC_DMA_HOSTLESS Capture",
 		0, 0, 0, 0),
+#ifdef CONFIG_AUDIO_ELLIPTIC_ULTRASOUND
+	SND_SOC_DAPM_AIF_IN("CDC_DMA_2_DL_HL", "CDC_DMA_2_HOSTLESS Playback",
+		0, 0, 0, 0),
+	SND_SOC_DAPM_AIF_OUT("CDC_DMA_2_UL_HL", "CDC_DMA_2_HOSTLESS Capture",
+		0, 0, 0, 0),
+#endif /* CONFIG_AUDIO_ELLIPTIC_ULTRASOUND */
 	SND_SOC_DAPM_AIF_OUT("TX3_CDC_DMA_UL_HL",
 		"TX3_CDC_DMA_HOSTLESS Capture", 0, 0, 0, 0),
 #endif
@@ -26754,7 +26747,6 @@ static const struct snd_soc_dapm_route intercon[] = {
 	{"MultiMedia19 Mixer", "TX_CDC_DMA_TX_3", "TX_CDC_DMA_TX_3"},
 	{"MultiMedia19 Mixer", "TX_CDC_DMA_TX_4", "TX_CDC_DMA_TX_4"},
 	{"MultiMedia19 Mixer", "TX_CDC_DMA_TX_5", "TX_CDC_DMA_TX_5"},
-
 	{"MultiMedia19 Mixer", "VA_CDC_DMA_TX_0", "VA_CDC_DMA_TX_0"},
 	{"MultiMedia19 Mixer", "VA_CDC_DMA_TX_1", "VA_CDC_DMA_TX_1"},
 #endif
@@ -27163,6 +27155,10 @@ static const struct snd_soc_dapm_route intercon[] = {
 	{"CDC_DMA_UL_HL", NULL, "VA_CDC_DMA_TX_0"},
 	{"RX_CDC_DMA_RX_0_DL_HL", "Switch", "CDC_DMA_DL_HL"},
 	{"RX_CDC_DMA_RX_0", NULL, "RX_CDC_DMA_RX_0_DL_HL"},
+#ifdef CONFIG_AUDIO_ELLIPTIC_ULTRASOUND
+	{"RX_CDC_DMA_RX_1", NULL, "CDC_DMA_2_DL_HL"},
+	{"CDC_DMA_2_UL_HL", NULL, "TX_CDC_DMA_TX_4"},
+#endif /* CONFIG_AUDIO_ELLIPTIC_ULTRASOUND */
 	{"RX_CDC_DMA_RX_1_DL_HL", "Switch", "CDC_DMA_DL_HL"},
 	{"RX_CDC_DMA_RX_1", NULL, "RX_CDC_DMA_RX_1_DL_HL"},
 	{"TX3_CDC_DMA_UL_HL", NULL, "TX_CDC_DMA_TX_3"},
@@ -27300,7 +27296,6 @@ static const struct snd_soc_dapm_route intercon[] = {
 	{"WSA_CDC_DMA_RX_0 Port Mixer", "VA_CDC_DMA_TX_0", "VA_CDC_DMA_TX_0"},
 	{"WSA_CDC_DMA_RX_0 Port Mixer", "TX_CDC_DMA_TX_3", "TX_CDC_DMA_TX_3"},
 	{"WSA_CDC_DMA_RX_0 Port Mixer", "SLIM_8_TX", "SLIMBUS_8_TX"},
-	{"WSA_CDC_DMA_RX_0 Port Mixer", "SLIM_7_TX", "SLIMBUS_7_TX"},
 	{"WSA_CDC_DMA_RX_0", NULL, "WSA_CDC_DMA_RX_0 Port Mixer"},
 
 	{"RX_CDC_DMA_RX_0 Port Mixer", "TX_CDC_DMA_TX_3", "TX_CDC_DMA_TX_3"},
@@ -31583,6 +31578,10 @@ static int msm_routing_probe(struct snd_soc_component *component)
 				      ARRAY_SIZE(pll_clk_drift_controls));
 	snd_soc_add_component_controls(component, mclk_src_controls,
 				      ARRAY_SIZE(mclk_src_controls));
+
+#ifdef CONFIG_AUDIO_ELLIPTIC_ULTRASOUND
+	elliptic_add_component_controls(component);
+#endif /* CONFIG_AUDIO_ELLIPTIC_ULTRASOUND */
 
 	return 0;
 }
